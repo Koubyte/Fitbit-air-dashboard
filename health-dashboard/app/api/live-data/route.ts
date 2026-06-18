@@ -3,7 +3,7 @@ import { backendUrl } from "@/lib/backend";
 
 export async function GET() {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), 10000); // 10-second timeout
+  const id = setTimeout(() => controller.abort(), 120000);
 
   try {
     const res = await fetch(backendUrl("/api/health-data"), {
@@ -32,7 +32,7 @@ export async function GET() {
       {
         error: "backend_unavailable",
         message: errorName === "AbortError"
-          ? "Request to the Python service timed out after 10 seconds."
+          ? "Request to the Python service timed out after 120 seconds."
           : "The Google Health gateway service is unavailable.",
       },
       { status: 503 }
