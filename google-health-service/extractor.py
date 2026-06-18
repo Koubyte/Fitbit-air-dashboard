@@ -78,7 +78,7 @@ def fetch_heart_rate(
     """Fetch intraday heart rate data via GET users/me/dataTypes/heart-rate/dataPoints."""
     start_time = f"{date_range['start_date']}T00:00:00Z"
     end_time = f"{date_range['end_date']}T23:59:59Z"
-    filter_expr = f"heart_rate.sample_time.physical_time >= \"{start_time}\" AND heart_rate.sample_time.physical_time <= \"{end_time}\""
+    filter_expr = f"heart_rate.sample_time.physical_time >= \"{start_time}\" AND heart_rate.sample_time.physical_time < \"{end_time}\""
     
     url = f"{BASE_URL}/users/me/dataTypes/heart-rate/dataPoints:reconcile"
     response = requests.get(
@@ -126,7 +126,7 @@ def fetch_spo2(
     """Fetch oxygen saturation data via GET users/me/dataTypes/oxygen-saturation/dataPoints."""
     start_time = f"{date_range['start_date']}T00:00:00Z"
     end_time = f"{date_range['end_date']}T23:59:59Z"
-    filter_expr = f"oxygen_saturation.sample_time.physical_time >= \"{start_time}\" AND oxygen_saturation.sample_time.physical_time <= \"{end_time}\""
+    filter_expr = f"oxygen_saturation.sample_time.physical_time >= \"{start_time}\" AND oxygen_saturation.sample_time.physical_time < \"{end_time}\""
     
     url = f"{BASE_URL}/users/me/dataTypes/oxygen-saturation/dataPoints:reconcile"
     response = requests.get(
@@ -163,7 +163,7 @@ def fetch_steps(
     """Fetch step count data via GET users/me/dataTypes/steps/dataPoints."""
     start_time = f"{date_range['start_date']}T00:00:00Z"
     end_time = f"{date_range['end_date']}T23:59:59Z"
-    filter_expr = f"steps.interval.start_time >= \"{start_time}\" AND steps.interval.start_time <= \"{end_time}\""
+    filter_expr = f"steps.interval.start_time >= \"{start_time}\" AND steps.interval.start_time < \"{end_time}\""
     
     url = f"{BASE_URL}/users/me/dataTypes/steps/dataPoints:reconcile"
     response = requests.get(
