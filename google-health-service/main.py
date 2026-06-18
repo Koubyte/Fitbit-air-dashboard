@@ -160,7 +160,7 @@ async def update_settings(body: SettingsRequest) -> JSONResponse:
                     "client_id": body.client_id,
                     "client_secret": body.client_secret,
                     "project_id": os.getenv("GOOGLE_PROJECT_ID", "fitbit-air-dashboard"),
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
                     "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
                     "redirect_uris": [redirect_uri],

@@ -47,7 +47,7 @@ def _client_config() -> dict[str, Any]:
             "web": {
                 "client_id": client_id,
                 "client_secret": client_secret,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
                 "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
                 "redirect_uris": [_redirect_uri()],
@@ -62,7 +62,11 @@ def _client_config() -> dict[str, Any]:
         )
 
     with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        config = json.load(f)
+
+    if "web" in config:
+        config["web"]["auth_uri"] = "https://accounts.google.com/o/oauth2/v2/auth"
+    return config
 
 
 def has_client_config() -> bool:
@@ -88,7 +92,6 @@ def get_authorization_url(redirect_uri: str | None = None) -> str:
     flow = _flow(redirect_uri)
     authorization_url, _ = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="true",
         prompt="consent",
     )
     return authorization_url
