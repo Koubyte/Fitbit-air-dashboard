@@ -68,6 +68,7 @@ USER_TARGET_SLEEP_HOURS = float(os.getenv("USER_TARGET_SLEEP_HOURS", "8"))
 WEBHOOK_FORWARD_SECRET = os.getenv("WEBHOOK_FORWARD_SECRET", "")
 MOBILE_INGEST_PATH = os.getenv("MOBILE_INGEST_PATH", "mobile-heart-rate.json")
 MOBILE_POINT_LIMIT = int(os.getenv("MOBILE_POINT_LIMIT", "20000"))
+CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "60"))
 CORS_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
@@ -165,6 +166,16 @@ def _attach_mobile_heart_rate(payload: dict[str, Any]) -> dict[str, Any]:
         by_ts[point["timestamp"]] = point
     payload["heart_rate"] = sorted(by_ts.values(), key=lambda point: point["timestamp"])[-10000:]
     return payload
+
+
+def _cache_is_fresh() -> bool:
+    if _cache["payload"] is None or not _cache["synced_at"]:
+        return False
+    try:
+        synced_at = datetime.fromisoformat(str(_cache["synced_at"]).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return datetime.now(timezone.utc) - synced_at < timedelta(seconds=CACHE_TTL_SECONDS)
 
 
 def _default_date_range(days: int = 30) -> dict[str, str]:
@@ -543,11 +554,11 @@ async def get_health_data() -> JSONResponse:
     it gracefully returns the empty shell payload so the frontend can display
     Sample Data Mode.
 
-    The Cache-Control header (max-age=300) prevents excessive backend querying.
+    The in-memory cache expires quickly so Live Data does not freeze.
     """
-    # Return cached payload if available
-    if _cache["payload"] is not None:
-        headers = {"Cache-Control": "max-age=300"}
+    # Return cached payload if it is still fresh.
+    if _cache_is_fresh():
+        headers = {"Cache-Control": "max-age=15"}
         return JSONResponse(content=_attach_mobile_heart_rate(_cache["payload"]), headers=headers)
 
     # Cache is empty: try to run automatic sync for the past 30 days
@@ -558,16 +569,19 @@ async def get_health_data() -> JSONResponse:
         _cache["payload"] = payload
         _cache["synced_at"] = datetime.now(timezone.utc).isoformat()
         
-        headers = {"Cache-Control": "max-age=300"}
+        headers = {"Cache-Control": "max-age=15"}
         return JSONResponse(content=payload, headers=headers)
         
     except Exception as e:
         logger.warning(
             f"Auto-sync on startup failed ({e}). Returning empty physiological shell."
         )
+        if _cache["payload"] is not None:
+            headers = {"Cache-Control": "max-age=15"}
+            return JSONResponse(content=_attach_mobile_heart_rate(_cache["payload"]), headers=headers)
         # Graceful fallback to empty shell for Sample Mode
         payload = _empty_health_payload()
-        headers = {"Cache-Control": "max-age=300"}
+        headers = {"Cache-Control": "max-age=15"}
         return JSONResponse(content=payload, headers=headers)
 
 
@@ -576,6 +590,8 @@ async def webhook_status() -> JSONResponse:
     return JSONResponse(content={
         **_webhook_state,
         "cache_synced_at": _cache["synced_at"],
+        "cache_ttl_seconds": CACHE_TTL_SECONDS,
+        "cache_fresh": _cache_is_fresh(),
         "cache_ready": _cache["payload"] is not None,
     })
 
