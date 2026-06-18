@@ -199,45 +199,45 @@ export default function RawMetricsPage() {
   const stepsArr: any[] = isLive ? (liveData.steps || []) : [];
   const sleepArr: any[] = isLive ? (liveData.sleep || []) : [];
 
-  // Mock fallback scalars
+  // Sample scalars
   const mockLatestHRV = mock.mockHRV[mock.mockHRV.length - 1]?.value ?? 51;
   const mockLatestTemp = mock.mockSkinTemp[mock.mockSkinTemp.length - 1]?.value ?? 0.12;
   const mockLatestSleep = mock.mockSleepDebt[mock.mockSleepDebt.length - 1]?.actual_hours ?? 7.4;
 
   const latestHR = heartRateArr.length
     ? Math.round(heartRateArr[heartRateArr.length - 1].value)
-    : 72;
+    : isLive ? "--" : 72;
 
   const latestHRV = hrvArr.length
     ? Math.round(hrvArr[hrvArr.length - 1].value)
-    : Math.round(mockLatestHRV);
+    : isLive ? "--" : Math.round(mockLatestHRV);
 
   const latestSpo2 = spo2Arr.length
     ? spo2Arr[spo2Arr.length - 1].value.toFixed(1)
-    : "97.4";
+    : isLive ? "--" : "97.4";
 
   const latestRestingHR = restingHRArr.length
     ? Math.round(restingHRArr[restingHRArr.length - 1].value)
-    : 58;
+    : isLive ? "--" : 58;
 
   const rawTemp = sleepTempArr.length
     ? sleepTempArr[sleepTempArr.length - 1].value
-    : mockLatestTemp;
+    : isLive ? null : mockLatestTemp;
   // Sanity check: if value > 10, API is returning absolute temperature, not deviation
-  const tempIsAbsolute = isLive && Math.abs(rawTemp) > 10;
+  const tempIsAbsolute = isLive && rawTemp !== null && Math.abs(rawTemp) > 10;
   const latestTemp = tempIsAbsolute ? rawTemp : rawTemp;
 
   const todaySteps = useMemo(() => {
-    if (!stepsArr.length) return 6820;
+    if (!stepsArr.length) return isLive ? 0 : 6820;
     const today = new Date().toISOString().slice(0, 10);
     return stepsArr
       .filter((s) => (s.timestamp || "").startsWith(today))
       .reduce((acc, s) => acc + (s.value || 0), 0);
-  }, [stepsArr]);
+  }, [stepsArr, isLive]);
 
   const latestSleepHours = sleepArr.length
     ? (sleepArr[sleepArr.length - 1].value?.total_sleep_minutes ?? 0) / 60
-    : mockLatestSleep;
+    : isLive ? 0 : mockLatestSleep;
 
   // Sparkline data
   const hrSparkPoints = heartRateArr.slice(-40).map((d) => d.value);
@@ -296,7 +296,7 @@ export default function RawMetricsPage() {
           unit="bpm"
           sub={isLive ? "Latest intraday reading" : "Sample — typical resting value"}
           color="rose"
-          sparkPoints={hrSparkPoints.length >= 2 ? hrSparkPoints : [68, 70, 72, 74, 71, 73, 72]}
+          sparkPoints={hrSparkPoints.length >= 2 ? hrSparkPoints : isLive ? undefined : [68, 70, 72, 74, 71, 73, 72]}
           latestTime={lastHRTime}
           metricKey="heart_rate"
         />
@@ -307,7 +307,7 @@ export default function RawMetricsPage() {
           label="HRV (RMSSD)"
           value={latestHRV}
           unit="ms"
-          sub={latestHRV >= 50 ? "Optimal recovery zone" : "Recovery suppressed"}
+          sub={latestHRV === "--" ? "No live data returned" : latestHRV >= 50 ? "Optimal recovery zone" : "Recovery suppressed"}
           color="violet"
           sparkPoints={hrvSparkPoints.length >= 2 ? hrvSparkPoints : undefined}
           latestTime={lastHRVTime}
@@ -322,7 +322,7 @@ export default function RawMetricsPage() {
           unit="%"
           sub={parseFloat(latestSpo2) >= 95 ? "Normal range" : "Below normal — monitor closely"}
           color="sky"
-          sparkPoints={spo2SparkPoints.length >= 2 ? spo2SparkPoints : [97.2, 97.4, 97.1, 97.6, 97.5, 97.3, 97.4]}
+          sparkPoints={spo2SparkPoints.length >= 2 ? spo2SparkPoints : isLive ? undefined : [97.2, 97.4, 97.1, 97.6, 97.5, 97.3, 97.4]}
           latestTime={lastSpo2Time}
           metricKey="spo2"
         />
@@ -333,7 +333,7 @@ export default function RawMetricsPage() {
           label="Resting Heart Rate"
           value={latestRestingHR}
           unit="bpm"
-          sub={latestRestingHR <= 60 ? "Excellent cardiovascular fitness" : "Within healthy range"}
+          sub={latestRestingHR === "--" ? "No live data returned" : latestRestingHR <= 60 ? "Excellent cardiovascular fitness" : "Within healthy range"}
           color="indigo"
           sparkPoints={restingHRArr.slice(-20).map((d) => d.value)}
           latestTime={restingHRArr.length ? fmt(restingHRArr[restingHRArr.length - 1].timestamp) : undefined}
@@ -344,14 +344,16 @@ export default function RawMetricsPage() {
         <MetricCard
           icon={<Thermometer className="h-5 w-5" />}
           label={tempIsAbsolute ? "Sleep Skin Temp (Abs)" : "Sleep Skin Temp Δ"}
-          value={tempIsAbsolute ? latestTemp.toFixed(1) : `${latestTemp >= 0 ? "+" : ""}${latestTemp.toFixed(2)}`}
+          value={latestTemp === null ? "--" : tempIsAbsolute ? latestTemp.toFixed(1) : `${latestTemp >= 0 ? "+" : ""}${latestTemp.toFixed(2)}`}
           unit="°C"
           sub={
-            tempIsAbsolute
+            latestTemp === null
+              ? "No live data returned"
+              : tempIsAbsolute
               ? "Absolute body temp — API not returning deviation"
               : Math.abs(latestTemp) < 0.5 ? "Stable baseline — no illness signal" : "Elevated — track closely"
           }
-          color={tempIsAbsolute ? "amber" : Math.abs(latestTemp) < 0.5 ? "emerald" : "amber"}
+          color={latestTemp === null ? "amber" : tempIsAbsolute ? "amber" : Math.abs(latestTemp) < 0.5 ? "emerald" : "amber"}
           sparkPoints={tempSparkPoints.length >= 2 ? tempSparkPoints : undefined}
           latestTime={lastTempTime}
           metricKey="skin_temp"
@@ -363,7 +365,7 @@ export default function RawMetricsPage() {
           label="Steps Today"
           value={todaySteps.toLocaleString()}
           unit="steps"
-          sub={todaySteps >= 10000 ? "Goal achieved!" : `${(10000 - todaySteps).toLocaleString()} steps to goal`}
+          sub={isLive && !stepsArr.length ? "No live data returned" : todaySteps >= 10000 ? "Goal achieved!" : `${(10000 - todaySteps).toLocaleString()} steps to goal`}
           color="emerald"
           sparkPoints={stepsArr.slice(-12).map((d) => d.value)}
           latestTime={lastStepsTime}

@@ -86,13 +86,13 @@ export function useChartData() {
   });
 
   return {
-    hrv: hrvMapped.length > 0 ? hrvMapped : mock.mockHRV,
-    ansBalance: ansMapped.length > 0 ? ansMapped : mock.mockANSBalance,
-    spo2Nocturnal: Object.keys(spo2Grouped).length > 0 ? spo2Grouped : mock.mockSpO2Nocturnal,
-    skinTemp: tempMapped.length > 0 ? tempMapped : mock.mockSkinTemp,
-    sleepDebt: sleepDebtMapped.length > 0 ? sleepDebtMapped : mock.mockSleepDebt,
-    vo2Max: vo2MaxMapped.length > 0 ? vo2MaxMapped : mock.mockVO2Max,
-    acuteStress: stressMapped.length > 0 ? stressMapped : mock.mockAcuteStress,
+    hrv: hrvMapped,
+    ansBalance: ansMapped,
+    spo2Nocturnal: spo2Grouped,
+    skinTemp: tempMapped,
+    sleepDebt: sleepDebtMapped,
+    vo2Max: vo2MaxMapped,
+    acuteStress: stressMapped,
   };
 }
 export type ChartData = ReturnType<typeof useChartData>;

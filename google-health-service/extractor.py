@@ -80,7 +80,7 @@ def fetch_heart_rate(
     end_time = f"{date_range['end_date']}T23:59:59Z"
     filter_expr = f"heart_rate.sample_time.physical_time >= \"{start_time}\" AND heart_rate.sample_time.physical_time <= \"{end_time}\""
     
-    url = f"{BASE_URL}/users/me/dataTypes/heart-rate/dataPoints"
+    url = f"{BASE_URL}/users/me/dataTypes/heart-rate/dataPoints:reconcile"
     response = requests.get(
         url,
         headers=_get_auth_headers(credentials),
@@ -128,7 +128,7 @@ def fetch_spo2(
     end_time = f"{date_range['end_date']}T23:59:59Z"
     filter_expr = f"oxygen_saturation.sample_time.physical_time >= \"{start_time}\" AND oxygen_saturation.sample_time.physical_time <= \"{end_time}\""
     
-    url = f"{BASE_URL}/users/me/dataTypes/oxygen-saturation/dataPoints"
+    url = f"{BASE_URL}/users/me/dataTypes/oxygen-saturation/dataPoints:reconcile"
     response = requests.get(
         url,
         headers=_get_auth_headers(credentials),
@@ -165,7 +165,7 @@ def fetch_steps(
     end_time = f"{date_range['end_date']}T23:59:59Z"
     filter_expr = f"steps.interval.start_time >= \"{start_time}\" AND steps.interval.start_time <= \"{end_time}\""
     
-    url = f"{BASE_URL}/users/me/dataTypes/steps/dataPoints"
+    url = f"{BASE_URL}/users/me/dataTypes/steps/dataPoints:reconcile"
     response = requests.get(
         url,
         headers=_get_auth_headers(credentials),
@@ -198,7 +198,7 @@ def fetch_daily_hrv(
     date_range: dict[str, str],
 ) -> list[dict[str, Any]]:
     """Fetch daily HRV aggregate via GET users/me/dataTypes/daily-heart-rate-variability/dataPoints."""
-    url = f"{BASE_URL}/users/me/dataTypes/daily-heart-rate-variability/dataPoints"
+    url = f"{BASE_URL}/users/me/dataTypes/daily-heart-rate-variability/dataPoints:reconcile"
     response = requests.get(
         url,
         headers=_get_auth_headers(credentials),
@@ -235,7 +235,7 @@ def fetch_daily_spo2(
     date_range: dict[str, str],
 ) -> list[dict[str, Any]]:
     """Fetch daily SpO2 aggregate via GET users/me/dataTypes/daily-oxygen-saturation/dataPoints."""
-    url = f"{BASE_URL}/users/me/dataTypes/daily-oxygen-saturation/dataPoints"
+    url = f"{BASE_URL}/users/me/dataTypes/daily-oxygen-saturation/dataPoints:reconcile"
     response = requests.get(
         url,
         headers=_get_auth_headers(credentials),
@@ -271,7 +271,7 @@ def fetch_daily_resting_hr(
     date_range: dict[str, str],
 ) -> list[dict[str, Any]]:
     """Fetch daily resting heart rate via GET users/me/dataTypes/daily-resting-heart-rate/dataPoints."""
-    url = f"{BASE_URL}/users/me/dataTypes/daily-resting-heart-rate/dataPoints"
+    url = f"{BASE_URL}/users/me/dataTypes/daily-resting-heart-rate/dataPoints:reconcile"
     response = requests.get(
         url,
         headers=_get_auth_headers(credentials),
@@ -311,7 +311,7 @@ def fetch_sleep_temp(
         logger.info("fetch_sleep_temp: SKIN_TEMP_AVAILABLE=false — skipping.")
         return []
 
-    url = f"{BASE_URL}/users/me/dataTypes/daily-sleep-temperature-derivations/dataPoints"
+    url = f"{BASE_URL}/users/me/dataTypes/daily-sleep-temperature-derivations/dataPoints:reconcile"
     response = requests.get(
         url,
         headers=_get_auth_headers(credentials),
@@ -354,7 +354,7 @@ def fetch_sleep(
     date_range: dict[str, str],
 ) -> list[dict[str, Any]]:
     """Fetch sleep sessions and stages via GET users/me/dataTypes/sleep/dataPoints."""
-    url = f"{BASE_URL}/users/me/dataTypes/sleep/dataPoints"
+    url = f"{BASE_URL}/users/me/dataTypes/sleep/dataPoints:reconcile"
     response = requests.get(
         url,
         headers=_get_auth_headers(credentials),
