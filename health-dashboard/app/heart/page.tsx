@@ -206,6 +206,7 @@ export default function HeartPage() {
 
   const allSupported = [
     ["Heart rate", liveData?.heart_rate?.length],
+    ["Phone HR", liveData?.mobile_heart_rate?.length],
     ["Resting HR", liveData?.daily_resting_hr?.length],
     ["Heart zones", liveData?.daily_heart_rate_zones?.length],
     ["Zone time", liveData?.time_in_heart_rate_zone?.length],

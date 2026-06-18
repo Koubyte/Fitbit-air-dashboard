@@ -66,6 +66,8 @@ USER_MAX_HR = float(os.getenv("USER_MAX_HR", "185"))
 USER_RESTING_HR = float(os.getenv("USER_RESTING_HR", "58"))
 USER_TARGET_SLEEP_HOURS = float(os.getenv("USER_TARGET_SLEEP_HOURS", "8"))
 WEBHOOK_FORWARD_SECRET = os.getenv("WEBHOOK_FORWARD_SECRET", "")
+MOBILE_INGEST_PATH = os.getenv("MOBILE_INGEST_PATH", "mobile-heart-rate.json")
+MOBILE_POINT_LIMIT = int(os.getenv("MOBILE_POINT_LIMIT", "20000"))
 CORS_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
@@ -94,6 +96,7 @@ def _empty_health_payload() -> dict[str, Any]:
     """Returns the standard empty payload structure for Phase 1."""
     return {
         "heart_rate": [],
+        "mobile_heart_rate": [],
         "hrv": [],
         "raw_hrv": [],
         "spo2": [],
@@ -112,6 +115,56 @@ def _empty_health_payload() -> dict[str, Any]:
             "sleep_debt": [],
         },
     }
+
+
+def _format_utc(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _load_mobile_heart_rate() -> list[dict[str, Any]]:
+    try:
+        with open(MOBILE_INGEST_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        points = data.get("heart_rate", []) if isinstance(data, dict) else []
+        return points if isinstance(points, list) else []
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_mobile_heart_rate(points: list[dict[str, Any]]) -> None:
+    directory = os.path.dirname(MOBILE_INGEST_PATH)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(MOBILE_INGEST_PATH, "w", encoding="utf-8") as f:
+        json.dump({"heart_rate": points[-MOBILE_POINT_LIMIT:]}, f)
+
+
+def _store_mobile_heart_rate(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_ts = {point["timestamp"]: point for point in _load_mobile_heart_rate()}
+    for point in points:
+        by_ts[point["timestamp"]] = point
+    stored = sorted(by_ts.values(), key=lambda point: point["timestamp"])[-MOBILE_POINT_LIMIT:]
+    _save_mobile_heart_rate(stored)
+    return stored
+
+
+def _attach_mobile_heart_rate(payload: dict[str, Any]) -> dict[str, Any]:
+    mobile_points = _load_mobile_heart_rate()
+    payload["mobile_heart_rate"] = mobile_points
+    if not mobile_points:
+        return payload
+
+    by_ts = {
+        point.get("timestamp"): point
+        for point in payload.get("heart_rate", [])
+        if point.get("timestamp")
+    }
+    for point in mobile_points:
+        by_ts[point["timestamp"]] = point
+    payload["heart_rate"] = sorted(by_ts.values(), key=lambda point: point["timestamp"])[-10000:]
+    return payload
 
 
 def _default_date_range(days: int = 30) -> dict[str, str]:
@@ -174,6 +227,7 @@ def _sync_health_payload(
 
     payload = {
         "heart_rate": heart_rate,
+        "mobile_heart_rate": [],
         "hrv": daily_hrv,
         "raw_hrv": hrv,
         "spo2": spo2,
@@ -243,6 +297,7 @@ def _refresh_cache_from_webhook(payload: dict[str, Any]) -> None:
             date_range,
             "webhook-sync",
         )
+        synced_payload = _attach_mobile_heart_rate(synced_payload)
         _cache["payload"] = synced_payload
         _cache["synced_at"] = datetime.now(timezone.utc).isoformat()
         _webhook_state["last_error"] = None
@@ -299,6 +354,23 @@ class SettingsRequest(BaseModel):
     max_hr: float
     resting_hr: float
     target_sleep_hours: float
+
+
+class MobileHeartRatePoint(BaseModel):
+    timestamp: datetime
+    value: float
+
+    @field_validator("value")
+    @classmethod
+    def validate_bpm(cls, value: float) -> float:
+        if value < 25 or value > 240:
+            raise ValueError("Heart rate must be between 25 and 240 bpm")
+        return value
+
+
+class MobileIngestRequest(BaseModel):
+    source: str = "android-health-connect"
+    heart_rate: list[MobileHeartRatePoint] = []
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -476,12 +548,13 @@ async def get_health_data() -> JSONResponse:
     # Return cached payload if available
     if _cache["payload"] is not None:
         headers = {"Cache-Control": "max-age=300"}
-        return JSONResponse(content=_cache["payload"], headers=headers)
+        return JSONResponse(content=_attach_mobile_heart_rate(_cache["payload"]), headers=headers)
 
     # Cache is empty: try to run automatic sync for the past 30 days
     try:
         credentials = get_credentials()
         payload, _ = _sync_health_payload(credentials, _default_date_range(), "auto-sync")
+        payload = _attach_mobile_heart_rate(payload)
         _cache["payload"] = payload
         _cache["synced_at"] = datetime.now(timezone.utc).isoformat()
         
@@ -532,6 +605,34 @@ async def google_health_webhook(
     background_tasks.add_task(_refresh_cache_from_webhook, payload)
 
     return Response(status_code=204)
+
+
+@app.post("/api/mobile-ingest", summary="Ingest Android Health Connect samples")
+async def mobile_ingest(body: MobileIngestRequest) -> JSONResponse:
+    points = [
+        {
+            "timestamp": _format_utc(point.timestamp),
+            "value": float(point.value),
+            "data_type": "MOBILE_HEALTH_CONNECT_HEART_RATE",
+            "source": body.source,
+        }
+        for point in body.heart_rate
+    ]
+    stored = _store_mobile_heart_rate(points) if points else _load_mobile_heart_rate()
+
+    if _cache["payload"] is None:
+        _cache["payload"] = _empty_health_payload()
+    _attach_mobile_heart_rate(_cache["payload"])
+    _cache["synced_at"] = datetime.now(timezone.utc).isoformat()
+
+    latest = stored[-1] if stored else None
+    return JSONResponse(content={
+        "status": "ok",
+        "heart_rate_received": len(points),
+        "mobile_heart_rate_stored": len(stored),
+        "latest": latest,
+        "synced_at": _cache["synced_at"],
+    })
 
 
 @app.post("/api/trigger-sync", summary="Force re-sync for a date range")
@@ -602,6 +703,7 @@ async def trigger_sync(body: SyncRequest) -> JSONResponse:
     # ── Build and cache compliance payload ────────────────────────────────────
     payload = {
         "heart_rate": heart_rate,
+        "mobile_heart_rate": [],
         "hrv": daily_hrv,  # Compliance: HRV maps to daily rollup trend in frontend
         "raw_hrv": hrv,
         "spo2": spo2,
@@ -621,6 +723,7 @@ async def trigger_sync(body: SyncRequest) -> JSONResponse:
         },
     }
 
+    payload = _attach_mobile_heart_rate(payload)
     _cache["payload"] = payload
     _cache["synced_at"] = datetime.now(timezone.utc).isoformat()
 

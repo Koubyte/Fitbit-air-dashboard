@@ -17,6 +17,7 @@ services:
       USER_TARGET_SLEEP_HOURS: ${USER_TARGET_SLEEP_HOURS:-8}
       SKIN_TEMP_AVAILABLE: ${SKIN_TEMP_AVAILABLE:-true}
       WEBHOOK_FORWARD_SECRET: ${WEBHOOK_FORWARD_SECRET:-}
+      MOBILE_INGEST_PATH: /data/mobile-heart-rate.json
     volumes:
       - google_health_data:/data
     expose:
