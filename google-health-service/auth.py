@@ -95,6 +95,8 @@ def get_authorization_url(redirect_uri: str | None = None) -> str:
 
 
 def finish_web_consent(code: str, redirect_uri: str | None = None) -> Credentials:
+    # Google can return granted scopes in a different order or with previous grants.
+    os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
     flow = _flow(redirect_uri)
     flow.fetch_token(code=code)
     creds = flow.credentials
