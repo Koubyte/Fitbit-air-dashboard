@@ -71,6 +71,117 @@ def _handle_response_errors(response: requests.Response, context: str) -> bool:
 
 # ─── Data Extraction Functions ──────────────────────────────────────────
 
+def _probe_data_points(
+    credentials: Credentials,
+    data_type: str,
+    method: str,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    suffix = "dataPoints:reconcile" if method == "reconcile" else "dataPoints"
+    url = f"{BASE_URL}/users/me/dataTypes/{data_type}/{suffix}"
+    try:
+        response = requests.get(
+            url,
+            headers=_get_auth_headers(credentials),
+            params=params or {},
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        return {"ok": False, "status_code": None, "error": str(exc)[:300]}
+
+    result: dict[str, Any] = {
+        "ok": response.ok,
+        "status_code": response.status_code,
+    }
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+
+    if response.ok:
+        points = body.get("dataPoints", [])
+        result["count"] = len(points)
+        result["next_page"] = bool(body.get("nextPageToken"))
+        if points:
+            result["first_fields"] = sorted(
+                key for key in points[0].keys()
+                if key not in {"name", "dataPointName"}
+            )
+        return result
+
+    error = body.get("error", {}) if isinstance(body, dict) else {}
+    message = error.get("message") if isinstance(error, dict) else None
+    result["error"] = (message or response.text)[:300]
+    return result
+
+
+def probe_google_health_endpoints(
+    credentials: Credentials,
+    date_range: dict[str, str],
+) -> dict[str, Any]:
+    """Safe diagnostics: endpoint status and counts, no health values."""
+    start_date = date_range["start_date"]
+    end_date = date_range["end_date"]
+    start_time = f"{start_date}T00:00:00Z"
+    end_time = f"{end_date}T23:59:59Z"
+
+    configs = [
+        {
+            "key": "heart_rate",
+            "data_type": "heart-rate",
+            "filter": f'heart_rate.sample_time.physical_time >= "{start_time}" AND heart_rate.sample_time.physical_time < "{end_time}"',
+        },
+        {
+            "key": "steps",
+            "data_type": "steps",
+            "filter": f'steps.interval.start_time >= "{start_time}" AND steps.interval.start_time < "{end_time}"',
+        },
+        {
+            "key": "oxygen_saturation",
+            "data_type": "oxygen-saturation",
+            "filter": f'oxygen_saturation.sample_time.physical_time >= "{start_time}" AND oxygen_saturation.sample_time.physical_time < "{end_time}"',
+        },
+        {
+            "key": "sleep",
+            "data_type": "sleep",
+            "filter": f'sleep.interval.civil_end_time >= "{start_date}" AND sleep.interval.civil_end_time < "{end_date}"',
+        },
+        {"key": "daily_resting_hr", "data_type": "daily-resting-heart-rate"},
+        {"key": "daily_hrv", "data_type": "daily-heart-rate-variability"},
+        {"key": "daily_spo2", "data_type": "daily-oxygen-saturation"},
+    ]
+
+    probes: dict[str, Any] = {}
+    for config in configs:
+        data_type = config["data_type"]
+        params: dict[str, Any] = {"pageSize": 1}
+        if config.get("filter"):
+            params["filter"] = config["filter"]
+
+        probes[config["key"]] = {
+            "list_filtered": _probe_data_points(credentials, data_type, "list", params),
+            "reconcile_filtered": _probe_data_points(credentials, data_type, "reconcile", params),
+            "reconcile_google_wearables": _probe_data_points(
+                credentials,
+                data_type,
+                "reconcile",
+                {
+                    **params,
+                    "dataSourceFamily": "users/me/dataSourceFamilies/google-wearables",
+                },
+            ),
+            "reconcile_any": _probe_data_points(
+                credentials,
+                data_type,
+                "reconcile",
+                {"pageSize": 1},
+            ),
+        }
+
+    return probes
+
+
 def fetch_heart_rate(
     credentials: Credentials,
     date_range: dict[str, str],

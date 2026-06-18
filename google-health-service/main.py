@@ -13,7 +13,7 @@ Run with: uvicorn main:app --reload --port 8000
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from dotenv import load_dotenv
@@ -45,6 +45,7 @@ from extractor import (
     fetch_sleep_temp,
     fetch_spo2,
     fetch_steps,
+    probe_google_health_endpoints,
 )
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -264,6 +265,39 @@ async def get_status() -> JSONResponse:
     """
     info = get_token_info()
     return JSONResponse(content=info)
+
+
+@app.get("/api/google-health-diagnostics", summary="Safe Google Health endpoint diagnostics")
+async def google_health_diagnostics(days: int = 30) -> JSONResponse:
+    """
+    Returns HTTP status and counts for key Google Health endpoints.
+
+    Does not return personal health values.
+    """
+    try:
+        credentials = get_credentials()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        logger.error(f"Diagnostics authentication failed: {e}")
+        raise HTTPException(status_code=503, detail=f"Authentication failed: {str(e)}")
+
+    clamped_days = max(1, min(days, 90))
+    end_date_obj = datetime.now(timezone.utc).date()
+    start_date_obj = end_date_obj - timedelta(days=clamped_days)
+    date_range = {
+        "start_date": start_date_obj.isoformat(),
+        "end_date": end_date_obj.isoformat(),
+    }
+
+    return JSONResponse(
+        content={
+            "date_range": date_range,
+            "endpoints": probe_google_health_endpoints(credentials, date_range),
+        }
+    )
 
 
 @app.get("/api/health-data", summary="Full raw and derived health data payload")
