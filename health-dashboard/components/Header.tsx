@@ -1,11 +1,13 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useDashboardStore } from "@/lib/store";
-import { Activity, Heart, Moon, Thermometer, Settings as SettingsIcon, Database, RefreshCw } from "lucide-react";
+import { Activity, Heart, Moon, Thermometer, Settings as SettingsIcon, Database, RefreshCw, ChartSpline } from "lucide-react";
 import { MetricInfo } from "@/components/MetricInfo";
+
+const LIVE_REFRESH_MS = 15000;
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -17,8 +19,8 @@ export function Header({ onOpenSettings }: HeaderProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
 
-  const handleRefresh = async () => {
-    if (dataMode !== "live") return;
+  const refreshLiveData = useCallback(async (silent = false) => {
+    if (dataMode !== "live" || isRefreshing) return;
     setIsRefreshing(true);
     try {
       const liveRes = await fetch("/api/live-data");
@@ -26,15 +28,23 @@ export function Header({ onOpenSettings }: HeaderProps) {
         const livePayload = await liveRes.json();
         setLiveData(livePayload);
         setLastSync(new Date().toISOString());
-      } else {
+      } else if (!silent) {
         addToast("Live data fetch failed.", "error");
       }
     } catch {
-      addToast("Backend is offline.", "error");
+      if (!silent) addToast("Backend is offline.", "error");
     } finally {
       setIsRefreshing(false);
     }
-  };
+  }, [addToast, dataMode, isRefreshing, setLastSync, setLiveData]);
+
+  const handleRefresh = () => refreshLiveData(false);
+
+  useEffect(() => {
+    if (dataMode !== "live") return;
+    const id = window.setInterval(() => refreshLiveData(true), LIVE_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [dataMode, refreshLiveData]);
 
   const handleToggleMode = async () => {
     if (dataMode === "live") {
@@ -70,6 +80,7 @@ export function Header({ onOpenSettings }: HeaderProps) {
   // Navigation tabs definition
   const navigation = [
     { name: "Overview", href: "/", icon: Activity },
+    { name: "Heart", href: "/heart", icon: ChartSpline },
     { name: "Recovery", href: "/recovery", icon: Heart },
     { name: "Sleep", href: "/sleep", icon: Moon },
     { name: "Raw Metrics", href: "/raw", icon: Database },
@@ -145,13 +156,13 @@ export function Header({ onOpenSettings }: HeaderProps) {
   return (
     <header className="sticky top-0 z-40 w-full border-b border-white/10 bg-slate-950/70 backdrop-blur-md">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="flex h-16 items-center justify-between gap-4">
+        <div className="flex min-h-16 flex-wrap items-center justify-between gap-3 py-3 sm:flex-nowrap sm:py-0">
           {/* Logo */}
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-tr from-violet-600 to-indigo-500 shadow-lg shadow-indigo-500/25">
+          <div className="flex min-w-0 shrink-0 items-center gap-2">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-violet-600 to-indigo-500 shadow-lg shadow-indigo-500/25">
               <Activity className="h-5 w-5 text-white" />
             </div>
-            <span className="bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-lg font-bold tracking-tight text-transparent">
+            <span className="whitespace-nowrap bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-base font-bold tracking-tight text-transparent sm:text-lg">
               Fitbit Air
             </span>
             <span className="hidden rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-400 sm:inline-block">
@@ -160,7 +171,7 @@ export function Header({ onOpenSettings }: HeaderProps) {
           </div>
 
           {/* Navigation Tabs */}
-          <nav className="flex items-center gap-1 sm:gap-2">
+          <nav className="order-3 flex w-full items-center justify-between gap-1 sm:order-none sm:w-auto sm:justify-center sm:gap-2">
             {navigation.map((tab) => {
               const Icon = tab.icon;
               const isActive = pathname === tab.href;
@@ -168,7 +179,7 @@ export function Header({ onOpenSettings }: HeaderProps) {
                 <Link
                   key={tab.name}
                   href={tab.href}
-                  className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 ${
+                  className={`flex h-10 w-10 items-center justify-center gap-1.5 rounded-lg text-sm font-medium transition-all duration-200 sm:h-auto sm:w-auto sm:px-3 sm:py-2 ${
                     isActive
                       ? "bg-white/10 text-white shadow-sm"
                       : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
@@ -182,7 +193,7 @@ export function Header({ onOpenSettings }: HeaderProps) {
 
             <button
               onClick={onOpenSettings}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-400 transition-all duration-200 hover:bg-white/5 hover:text-slate-200"
+              className="flex h-10 w-10 items-center justify-center gap-1.5 rounded-lg text-sm font-medium text-slate-400 transition-all duration-200 hover:bg-white/5 hover:text-slate-200 sm:h-auto sm:w-auto sm:px-3 sm:py-2"
             >
               <SettingsIcon className="h-4 w-4" />
               <span className="hidden sm:inline">Settings</span>
@@ -190,7 +201,7 @@ export function Header({ onOpenSettings }: HeaderProps) {
           </nav>
 
           {/* Status Badge & Sync Info */}
-          <div className="flex items-center gap-3">
+          <div className="order-2 flex shrink-0 items-center gap-2 sm:order-none sm:gap-3">
             {/* Sync timestamp */}
             <div className="hidden text-right text-xs md:block">
               <span className="text-slate-500">Last Sync:</span>{" "}
@@ -215,7 +226,7 @@ export function Header({ onOpenSettings }: HeaderProps) {
             <button
               onClick={handleToggleMode}
               disabled={isToggling}
-              className={`relative inline-flex h-8 w-32 items-center rounded-full border px-1 text-[10px] font-bold tracking-wide transition-all duration-300 ${
+              className={`relative inline-flex h-8 w-28 items-center rounded-full border px-1 text-[10px] font-bold tracking-wide transition-all duration-300 sm:w-32 ${
                 dataMode === "live"
                   ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-[0_0_12px_-3px_rgba(16,185,129,0.25)] hover:bg-emerald-500/20 cursor-pointer"
                   : "bg-slate-800/80 border-slate-700 hover:bg-slate-700/80 text-slate-400 cursor-pointer"
@@ -229,10 +240,15 @@ export function Header({ onOpenSettings }: HeaderProps) {
                     : "left-1 bg-slate-600"
                 } ${isToggling ? "animate-pulse" : ""}`}
               />
-              <span className={`w-full text-center transition-opacity duration-300 ${
+              <span className={`hidden w-full text-center transition-opacity duration-300 sm:block ${
                 dataMode === "live" ? "pr-6 text-emerald-300" : "pl-6 text-slate-300"
               }`}>
                 {isToggling ? "SYNC..." : dataMode === "live" ? "LIVE DATA" : "SAMPLE DATA"}
+              </span>
+              <span className={`block w-full text-center transition-opacity duration-300 sm:hidden ${
+                dataMode === "live" ? "pr-6 text-emerald-300" : "pl-6 text-slate-300"
+              }`}>
+                {isToggling ? "SYNC" : dataMode === "live" ? "LIVE" : "SAMPLE"}
               </span>
             </button>
           </div>

@@ -47,10 +47,14 @@ export function useChartData() {
     debt_hours: d.debt_hours,
   })).sort((a: any, b: any) => a.date.localeCompare(b.date));
 
-  // 5. VO2 Max: Already computed on backend
-  const vo2MaxMapped = (liveData.derived?.vo2_max || []).map((d: any) => ({
+  // 5. VO2 Max: Prefer native Google/Fitbit daily VO2, fallback to derived estimate.
+  const vo2Source = (liveData.daily_vo2_max || []).length
+    ? liveData.daily_vo2_max
+    : (liveData.derived?.vo2_max || []);
+  const vo2MaxMapped = vo2Source.map((d: any) => ({
     date: d.date,
     vo2_max: d.vo2_max,
+    level: d.level,
   })).sort((a: any, b: any) => a.date.localeCompare(b.date));
 
   // 6. Acute Stress Events: Already computed on backend

@@ -148,8 +148,15 @@ def probe_google_health_endpoints(
             "filter": f'sleep.interval.civil_end_time >= "{start_date}" AND sleep.interval.civil_end_time < "{end_date}"',
         },
         {"key": "daily_resting_hr", "data_type": "daily-resting-heart-rate"},
+        {"key": "daily_heart_rate_zones", "data_type": "daily-heart-rate-zones"},
         {"key": "daily_hrv", "data_type": "daily-heart-rate-variability"},
         {"key": "daily_spo2", "data_type": "daily-oxygen-saturation"},
+        {"key": "daily_vo2_max", "data_type": "daily-vo2-max"},
+        {"key": "time_in_heart_rate_zone", "data_type": "time-in-heart-rate-zone"},
+        {"key": "vo2_max", "data_type": "vo2-max"},
+        {"key": "active_zone_minutes", "data_type": "active-zone-minutes"},
+        {"key": "respiratory_rate_sleep", "data_type": "respiratory-rate-sleep-summary"},
+        {"key": "daily_respiratory_rate", "data_type": "daily-respiratory-rate"},
     ]
 
     probes: dict[str, Any] = {}
@@ -224,12 +231,39 @@ def fetch_hrv(
     credentials: Credentials,
     date_range: dict[str, str],
 ) -> list[dict[str, Any]]:
-    """
-    Fetch intraday heart rate variability (RMSSD) data.
-    Google Health API provides daily HRV metrics via daily-heart-rate-variability.
-    If intraday HRV is requested, we map to daily-heart-rate-variability.
-    """
-    return fetch_daily_hrv(credentials, date_range)
+    """Fetch intraday HRV samples when available."""
+    start_time = f"{date_range['start_date']}T00:00:00Z"
+    end_time = f"{date_range['end_date']}T23:59:59Z"
+    filter_expr = f"heart_rate_variability.sample_time.physical_time >= \"{start_time}\" AND heart_rate_variability.sample_time.physical_time < \"{end_time}\""
+
+    url = f"{BASE_URL}/users/me/dataTypes/heart-rate-variability/dataPoints:reconcile"
+    response = requests.get(
+        url,
+        headers=_get_auth_headers(credentials),
+        params={"filter": filter_expr, "pageSize": 10000},
+        timeout=30,
+    )
+    if not _handle_response_errors(response, "fetch_hrv"):
+        return []
+
+    normalized = []
+    for pt in response.json().get("dataPoints", []):
+        hrv_data = pt.get("heartRateVariability", {})
+        ts = hrv_data.get("sampleTime", {}).get("physicalTime")
+        val = (
+            hrv_data.get("rootMeanSquareOfSuccessiveDifferencesMilliseconds")
+            or hrv_data.get("standardDeviationMilliseconds")
+        )
+        if ts and val is not None:
+            normalized.append({
+                "timestamp": ts,
+                "value": float(val),
+                "data_type": "HEART_RATE_VARIABILITY"
+            })
+
+    normalized.sort(key=lambda x: x["timestamp"])
+    logger.info(f"fetch_hrv: {len(normalized)} points returned.")
+    return normalized
 
 def fetch_spo2(
     credentials: Credentials,
@@ -414,6 +448,115 @@ def fetch_daily_resting_hr(
                 
     normalized.sort(key=lambda x: x["timestamp"])
     logger.info(f"fetch_daily_resting_hr: {len(normalized)} records returned.")
+    return normalized
+
+def fetch_daily_heart_rate_zones(
+    credentials: Credentials,
+    date_range: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Fetch daily Google Health heart rate zone thresholds."""
+    url = f"{BASE_URL}/users/me/dataTypes/daily-heart-rate-zones/dataPoints:reconcile"
+    response = requests.get(
+        url,
+        headers=_get_auth_headers(credentials),
+        params={"pageSize": 100},
+        timeout=30,
+    )
+    if not _handle_response_errors(response, "fetch_daily_heart_rate_zones"):
+        return []
+
+    normalized = []
+    for pt in response.json().get("dataPoints", []):
+        zone_data = pt.get("dailyHeartRateZones", {})
+        date_str = _parse_date(zone_data.get("date", {}))
+        if date_range["start_date"] <= date_str <= date_range["end_date"]:
+            normalized.append({
+                "timestamp": date_str,
+                "zones": [
+                    {
+                        "type": zone.get("heartRateZoneType"),
+                        "min": int(zone.get("minBeatsPerMinute") or 0),
+                        "max": int(zone.get("maxBeatsPerMinute") or 0),
+                    }
+                    for zone in zone_data.get("heartRateZones", [])
+                ],
+                "data_type": "DAILY_HEART_RATE_ZONES",
+            })
+
+    normalized.sort(key=lambda x: x["timestamp"])
+    logger.info(f"fetch_daily_heart_rate_zones: {len(normalized)} records returned.")
+    return normalized
+
+def fetch_time_in_heart_rate_zone(
+    credentials: Credentials,
+    date_range: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Fetch interval records describing time spent in heart rate zones."""
+    start_time = f"{date_range['start_date']}T00:00:00Z"
+    end_time = f"{date_range['end_date']}T23:59:59Z"
+    filter_expr = f"time_in_heart_rate_zone.interval.start_time >= \"{start_time}\" AND time_in_heart_rate_zone.interval.start_time < \"{end_time}\""
+
+    url = f"{BASE_URL}/users/me/dataTypes/time-in-heart-rate-zone/dataPoints:reconcile"
+    response = requests.get(
+        url,
+        headers=_get_auth_headers(credentials),
+        params={"filter": filter_expr, "pageSize": 10000},
+        timeout=30,
+    )
+    if not _handle_response_errors(response, "fetch_time_in_heart_rate_zone"):
+        return []
+
+    normalized = []
+    for pt in response.json().get("dataPoints", []):
+        zone_data = pt.get("timeInHeartRateZone", {})
+        interval = zone_data.get("interval", {})
+        start = interval.get("startTime")
+        end = interval.get("endTime")
+        if start and end:
+            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+            normalized.append({
+                "timestamp": start,
+                "end": end,
+                "zone": zone_data.get("heartRateZoneType"),
+                "minutes": round((end_dt - start_dt).total_seconds() / 60, 2),
+                "data_type": "TIME_IN_HEART_RATE_ZONE",
+            })
+
+    normalized.sort(key=lambda x: x["timestamp"])
+    logger.info(f"fetch_time_in_heart_rate_zone: {len(normalized)} records returned.")
+    return normalized
+
+def fetch_daily_vo2_max(
+    credentials: Credentials,
+    date_range: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Fetch native daily VO2 max when Fitbit/Google exposes it."""
+    url = f"{BASE_URL}/users/me/dataTypes/daily-vo2-max/dataPoints:reconcile"
+    response = requests.get(
+        url,
+        headers=_get_auth_headers(credentials),
+        params={"pageSize": 100},
+        timeout=30,
+    )
+    if not _handle_response_errors(response, "fetch_daily_vo2_max"):
+        return []
+
+    normalized = []
+    for pt in response.json().get("dataPoints", []):
+        vo2_data = pt.get("dailyVo2Max", {})
+        date_str = _parse_date(vo2_data.get("date", {}))
+        val = vo2_data.get("vo2Max")
+        if date_range["start_date"] <= date_str <= date_range["end_date"] and val is not None:
+            normalized.append({
+                "date": date_str,
+                "vo2_max": float(val),
+                "level": vo2_data.get("cardioFitnessLevel"),
+                "estimated": bool(vo2_data.get("estimated")),
+            })
+
+    normalized.sort(key=lambda x: x["date"])
+    logger.info(f"fetch_daily_vo2_max: {len(normalized)} records returned.")
     return normalized
 
 def fetch_sleep_temp(

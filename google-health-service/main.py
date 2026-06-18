@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
@@ -36,15 +36,18 @@ from derived_metrics import (
     identify_acute_stress,
 )
 from extractor import (
+    fetch_daily_heart_rate_zones,
     fetch_daily_hrv,
     fetch_daily_resting_hr,
     fetch_daily_spo2,
+    fetch_daily_vo2_max,
     fetch_heart_rate,
     fetch_hrv,
     fetch_sleep,
     fetch_sleep_temp,
     fetch_spo2,
     fetch_steps,
+    fetch_time_in_heart_rate_zone,
     probe_google_health_endpoints,
 )
 
@@ -62,6 +65,7 @@ load_dotenv(SETTINGS_PATH, override=False)
 USER_MAX_HR = float(os.getenv("USER_MAX_HR", "185"))
 USER_RESTING_HR = float(os.getenv("USER_RESTING_HR", "58"))
 USER_TARGET_SLEEP_HOURS = float(os.getenv("USER_TARGET_SLEEP_HOURS", "8"))
+WEBHOOK_FORWARD_SECRET = os.getenv("WEBHOOK_FORWARD_SECRET", "")
 CORS_ORIGINS = [
     origin.strip()
     for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
@@ -76,13 +80,28 @@ _cache: dict[str, Any] = {
     "synced_at": None,      # ISO 8601 timestamp of last successful sync
 }
 
+_webhook_state: dict[str, Any] = {
+    "count": 0,
+    "last_received_at": None,
+    "last_data_type": None,
+    "last_operation": None,
+    "last_intervals": [],
+    "last_error": None,
+}
+
 # ─── Empty response shell ─────────────────────────────────────────────────────
 def _empty_health_payload() -> dict[str, Any]:
     """Returns the standard empty payload structure for Phase 1."""
     return {
         "heart_rate": [],
         "hrv": [],
+        "raw_hrv": [],
         "spo2": [],
+        "daily_spo2": [],
+        "daily_resting_hr": [],
+        "daily_heart_rate_zones": [],
+        "time_in_heart_rate_zone": [],
+        "daily_vo2_max": [],
         "sleep_temp": [],
         "sleep": [],
         "steps": [],
@@ -93,6 +112,148 @@ def _empty_health_payload() -> dict[str, Any]:
             "sleep_debt": [],
         },
     }
+
+
+def _default_date_range(days: int = 30) -> dict[str, str]:
+    end_date_obj = datetime.now(timezone.utc).date()
+    start_date_obj = end_date_obj - timedelta(days=days)
+    return {
+        "start_date": start_date_obj.isoformat(),
+        "end_date": end_date_obj.isoformat(),
+    }
+
+
+def _sync_health_payload(
+    credentials: Any,
+    date_range: dict[str, str],
+    context: str,
+) -> tuple[dict[str, Any], int]:
+    logger.info(
+        "%s: Fetching Google Health data from %s to %s",
+        context,
+        date_range["start_date"],
+        date_range["end_date"],
+    )
+
+    heart_rate = fetch_heart_rate(credentials, date_range)
+    hrv = fetch_hrv(credentials, date_range)
+    spo2 = fetch_spo2(credentials, date_range)
+    steps = fetch_steps(credentials, date_range)
+    daily_hrv = fetch_daily_hrv(credentials, date_range)
+    daily_spo2 = fetch_daily_spo2(credentials, date_range)
+    daily_resting_hr = fetch_daily_resting_hr(credentials, date_range)
+    daily_heart_rate_zones = fetch_daily_heart_rate_zones(credentials, date_range)
+    time_in_heart_rate_zone = fetch_time_in_heart_rate_zone(credentials, date_range)
+    daily_vo2_max = fetch_daily_vo2_max(credentials, date_range)
+    sleep_temp = fetch_sleep_temp(credentials, date_range)
+    sleep = fetch_sleep(credentials, date_range)
+
+    ans_balance = []
+    try:
+        ans_balance = calculate_ans_balance(hrv)
+    except Exception as e:
+        logger.error("%s calculate_ans_balance failed: %s", context, e)
+
+    vo2_max = []
+    try:
+        vo2_max = calculate_vo2_max(daily_resting_hr, USER_MAX_HR)
+    except Exception as e:
+        logger.error("%s calculate_vo2_max failed: %s", context, e)
+
+    acute_stress = []
+    try:
+        acute_stress = identify_acute_stress(heart_rate, steps, USER_RESTING_HR)
+    except Exception as e:
+        logger.error("%s identify_acute_stress failed: %s", context, e)
+
+    sleep_debt = []
+    try:
+        sleep_debt = calculate_sleep_debt(sleep, USER_TARGET_SLEEP_HOURS)
+    except Exception as e:
+        logger.error("%s calculate_sleep_debt failed: %s", context, e)
+
+    payload = {
+        "heart_rate": heart_rate,
+        "hrv": daily_hrv,
+        "raw_hrv": hrv,
+        "spo2": spo2,
+        "daily_spo2": daily_spo2,
+        "daily_resting_hr": daily_resting_hr,
+        "daily_heart_rate_zones": daily_heart_rate_zones,
+        "time_in_heart_rate_zone": time_in_heart_rate_zone,
+        "daily_vo2_max": daily_vo2_max,
+        "sleep_temp": sleep_temp,
+        "sleep": sleep,
+        "steps": steps,
+        "derived": {
+            "ans_balance": ans_balance,
+            "vo2_max": vo2_max,
+            "acute_stress": acute_stress,
+            "sleep_debt": sleep_debt,
+        },
+    }
+    total_records = sum(
+        len(series)
+        for series in [
+            heart_rate,
+            hrv,
+            spo2,
+            steps,
+            daily_hrv,
+            daily_spo2,
+            daily_resting_hr,
+            daily_heart_rate_zones,
+            time_in_heart_rate_zone,
+            daily_vo2_max,
+            sleep_temp,
+            sleep,
+        ]
+    )
+    return payload, total_records
+
+
+def _date_range_from_webhook(payload: dict[str, Any]) -> dict[str, str]:
+    data = payload.get("data", {})
+    parsed_dates = []
+    for interval in data.get("intervals", []):
+        physical = interval.get("physicalTimeInterval", {})
+        for key in ("startTime", "endTime"):
+            value = physical.get(key)
+            if not value:
+                continue
+            try:
+                parsed_dates.append(datetime.fromisoformat(value.replace("Z", "+00:00")).date())
+            except ValueError:
+                continue
+
+    if not parsed_dates:
+        return _default_date_range(days=2)
+
+    start_date = min(parsed_dates) - timedelta(days=1)
+    end_date = max(parsed_dates) + timedelta(days=1)
+    return {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()}
+
+
+def _refresh_cache_from_webhook(payload: dict[str, Any]) -> None:
+    try:
+        credentials = get_credentials()
+        date_range = _date_range_from_webhook(payload)
+        synced_payload, total_records = _sync_health_payload(
+            credentials,
+            date_range,
+            "webhook-sync",
+        )
+        _cache["payload"] = synced_payload
+        _cache["synced_at"] = datetime.now(timezone.utc).isoformat()
+        _webhook_state["last_error"] = None
+        logger.info(
+            "webhook-sync complete: %s records cached at %s",
+            total_records,
+            _cache["synced_at"],
+        )
+    except Exception as e:
+        _webhook_state["last_error"] = str(e)
+        logger.error("webhook-sync failed: %s", e)
 
 
 # ─── FastAPI App ──────────────────────────────────────────────────────────────
@@ -318,74 +479,9 @@ async def get_health_data() -> JSONResponse:
         return JSONResponse(content=_cache["payload"], headers=headers)
 
     # Cache is empty: try to run automatic sync for the past 30 days
-    from datetime import timedelta
-    end_date_obj = datetime.now(timezone.utc).date()
-    start_date_obj = end_date_obj - timedelta(days=30)
-    
-    start_date_str = start_date_obj.isoformat()
-    end_date_str = end_date_obj.isoformat()
-
-    logger.info(f"Auto-syncing past 30 days: {start_date_str} to {end_date_str}")
-    
     try:
         credentials = get_credentials()
-        date_range = {"start_date": start_date_str, "end_date": end_date_str}
-        
-        # Fetch all data streams
-        heart_rate = fetch_heart_rate(credentials, date_range)
-        hrv = fetch_hrv(credentials, date_range)
-        spo2 = fetch_spo2(credentials, date_range)
-        steps = fetch_steps(credentials, date_range)
-        daily_hrv = fetch_daily_hrv(credentials, date_range)
-        daily_spo2 = fetch_daily_spo2(credentials, date_range)
-        daily_resting_hr = fetch_daily_resting_hr(credentials, date_range)
-        sleep_temp = fetch_sleep_temp(credentials, date_range)
-        sleep = fetch_sleep(credentials, date_range)
-
-        # Run derived metrics calculations
-        ans_balance = []
-        try:
-            ans_balance = calculate_ans_balance(hrv)
-        except Exception as e:
-            logger.error(f"Auto-sync calculate_ans_balance failed: {e}")
-
-        vo2_max = []
-        try:
-            vo2_max = calculate_vo2_max(daily_resting_hr, USER_MAX_HR)
-        except Exception as e:
-            logger.error(f"Auto-sync calculate_vo2_max failed: {e}")
-
-        acute_stress = []
-        try:
-            acute_stress = identify_acute_stress(heart_rate, steps, USER_RESTING_HR)
-        except Exception as e:
-            logger.error(f"Auto-sync identify_acute_stress failed: {e}")
-
-        sleep_debt = []
-        try:
-            sleep_debt = calculate_sleep_debt(sleep, USER_TARGET_SLEEP_HOURS)
-        except Exception as e:
-            logger.error(f"Auto-sync calculate_sleep_debt failed: {e}")
-
-        # Build compliance payload: 'hrv' contains daily_hrv for trends, 'raw_hrv' keeps intraday
-        payload = {
-            "heart_rate": heart_rate,
-            "hrv": daily_hrv,
-            "raw_hrv": hrv,
-            "spo2": spo2,
-            "daily_spo2": daily_spo2,
-            "daily_resting_hr": daily_resting_hr,
-            "sleep_temp": sleep_temp,
-            "sleep": sleep,
-            "steps": steps,
-            "derived": {
-                "ans_balance": ans_balance,
-                "vo2_max": vo2_max,
-                "acute_stress": acute_stress,
-                "sleep_debt": sleep_debt,
-            },
-        }
-        
+        payload, _ = _sync_health_payload(credentials, _default_date_range(), "auto-sync")
         _cache["payload"] = payload
         _cache["synced_at"] = datetime.now(timezone.utc).isoformat()
         
@@ -400,6 +496,42 @@ async def get_health_data() -> JSONResponse:
         payload = _empty_health_payload()
         headers = {"Cache-Control": "max-age=300"}
         return JSONResponse(content=payload, headers=headers)
+
+
+@app.get("/api/webhook-status", summary="Google Health webhook receiver status")
+async def webhook_status() -> JSONResponse:
+    return JSONResponse(content={
+        **_webhook_state,
+        "cache_synced_at": _cache["synced_at"],
+        "cache_ready": _cache["payload"] is not None,
+    })
+
+
+@app.post("/api/webhooks/google-health", summary="Internal Google Health webhook receiver")
+async def google_health_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_webhook_forward_secret: str | None = Header(default=None),
+) -> Response:
+    if WEBHOOK_FORWARD_SECRET and x_webhook_forward_secret != WEBHOOK_FORWARD_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid webhook forward secret")
+
+    payload = await request.json()
+    data = payload.get("data", {})
+    received_at = datetime.now(timezone.utc).isoformat()
+
+    _webhook_state["count"] = int(_webhook_state["count"] or 0) + 1
+    _webhook_state["last_received_at"] = received_at
+    _webhook_state["last_data_type"] = data.get("dataType")
+    _webhook_state["last_operation"] = data.get("operation")
+    _webhook_state["last_intervals"] = data.get("intervals", [])
+    _webhook_state["last_error"] = None
+
+    # The next frontend refresh must not reuse stale data.
+    _cache["payload"] = None
+    background_tasks.add_task(_refresh_cache_from_webhook, payload)
+
+    return Response(status_code=204)
 
 
 @app.post("/api/trigger-sync", summary="Force re-sync for a date range")
@@ -436,6 +568,9 @@ async def trigger_sync(body: SyncRequest) -> JSONResponse:
     daily_hrv = fetch_daily_hrv(credentials, date_range)
     daily_spo2 = fetch_daily_spo2(credentials, date_range)
     daily_resting_hr = fetch_daily_resting_hr(credentials, date_range)
+    daily_heart_rate_zones = fetch_daily_heart_rate_zones(credentials, date_range)
+    time_in_heart_rate_zone = fetch_time_in_heart_rate_zone(credentials, date_range)
+    daily_vo2_max = fetch_daily_vo2_max(credentials, date_range)
     sleep_temp = fetch_sleep_temp(credentials, date_range)
     sleep = fetch_sleep(credentials, date_range)
 
@@ -472,6 +607,9 @@ async def trigger_sync(body: SyncRequest) -> JSONResponse:
         "spo2": spo2,
         "daily_spo2": daily_spo2,
         "daily_resting_hr": daily_resting_hr,
+        "daily_heart_rate_zones": daily_heart_rate_zones,
+        "time_in_heart_rate_zone": time_in_heart_rate_zone,
+        "daily_vo2_max": daily_vo2_max,
         "sleep_temp": sleep_temp,
         "sleep": sleep,
         "steps": steps,

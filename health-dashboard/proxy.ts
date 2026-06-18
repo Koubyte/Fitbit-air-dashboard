@@ -16,7 +16,8 @@ export function proxy(request: NextRequest) {
   if (
     path.startsWith("/_next") ||
     path === "/favicon.ico" ||
-    path.startsWith("/api/auth/callback")
+    path.startsWith("/api/auth/callback") ||
+    path.startsWith("/api/webhooks/google-health")
   ) {
     return NextResponse.next();
   }
