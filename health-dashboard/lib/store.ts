@@ -29,7 +29,7 @@ interface DashboardState {
 }
 
 export const useDashboardStore = create<DashboardState>((set) => ({
-  dataMode: "sample",
+  dataMode: "live",
   setDataMode: (mode) => set({ dataMode: mode }),
   lastSync: null,
   setLastSync: (ts) => set({ lastSync: ts }),

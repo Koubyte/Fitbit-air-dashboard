@@ -42,6 +42,7 @@ export function Header({ onOpenSettings }: HeaderProps) {
 
   useEffect(() => {
     if (dataMode !== "live") return;
+    refreshLiveData(true);
     const id = window.setInterval(() => refreshLiveData(true), LIVE_REFRESH_MS);
     return () => window.clearInterval(id);
   }, [dataMode, refreshLiveData]);
