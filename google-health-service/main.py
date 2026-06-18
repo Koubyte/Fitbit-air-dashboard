@@ -22,7 +22,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-from auth import get_credentials, get_token_info
+from auth import (
+    finish_web_consent,
+    get_authorization_url,
+    get_credentials,
+    get_token_info,
+    has_client_config,
+)
 from derived_metrics import (
     calculate_ans_balance,
     calculate_sleep_debt,
@@ -50,9 +56,16 @@ logger = logging.getLogger("main")
 
 # ─── Environment ──────────────────────────────────────────────────────────────
 load_dotenv()
+SETTINGS_PATH = os.getenv("SETTINGS_PATH", ".env")
+load_dotenv(SETTINGS_PATH, override=False)
 USER_MAX_HR = float(os.getenv("USER_MAX_HR", "185"))
 USER_RESTING_HR = float(os.getenv("USER_RESTING_HR", "58"))
 USER_TARGET_SLEEP_HOURS = float(os.getenv("USER_TARGET_SLEEP_HOURS", "8"))
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
 
 # ─── In-memory cache ──────────────────────────────────────────────────────────
 # Stores the most recently fetched payload. Cleared on trigger-sync.
@@ -95,7 +108,7 @@ app = FastAPI(
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Next.js dev server
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -118,9 +131,9 @@ class SyncRequest(BaseModel):
 
 
 class SettingsRequest(BaseModel):
-    client_id: str
-    client_secret: str
-    age: int
+    client_id: str | None = None
+    client_secret: str | None = None
+    age: int = 28
     max_hr: float
     resting_hr: float
     target_sleep_hours: float
@@ -130,32 +143,46 @@ class SettingsRequest(BaseModel):
 
 @app.post("/api/settings", summary="Update GCP credentials and user baselines")
 async def update_settings(body: SettingsRequest) -> JSONResponse:
-    # 1. Update credentials.json
-    try:
-        creds_data = {
-            "installed": {
-                "client_id": body.client_id,
-                "client_secret": body.client_secret,
-                "project_id": "fitbit-air-dashboard-499709",
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "redirect_uris": ["http://localhost"]
+    # Optional: env vars are preferred on Coolify. Only write credentials if both
+    # fields are filled, so an empty settings form cannot break OAuth.
+    if bool(body.client_id) != bool(body.client_secret):
+        raise HTTPException(status_code=400, detail="Provide both client ID and client secret.")
+
+    if body.client_id and body.client_secret:
+        try:
+            redirect_uri = (
+                os.getenv("GOOGLE_REDIRECT_URI")
+                or f"{os.getenv('PUBLIC_APP_URL', 'http://localhost:3000').rstrip('/')}/api/auth/callback"
+            )
+            creds_data = {
+                "web": {
+                    "client_id": body.client_id,
+                    "client_secret": body.client_secret,
+                    "project_id": os.getenv("GOOGLE_PROJECT_ID", "fitbit-air-dashboard"),
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "redirect_uris": [redirect_uri],
+                }
             }
-        }
-        from auth import CREDENTIALS_PATH, TOKEN_PATH
-        with open(CREDENTIALS_PATH, "w") as f:
-            json.dump(creds_data, f, indent=2)
-        logger.info("Updated credentials.json with new GCP client ID/secret.")
-    except Exception as e:
-        logger.error(f"Failed to update credentials.json: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update credentials.json: {str(e)}")
+            from auth import CREDENTIALS_PATH, TOKEN_PATH
+            credentials_path = os.path.abspath(CREDENTIALS_PATH)
+            os.makedirs(os.path.dirname(credentials_path) or ".", exist_ok=True)
+            with open(credentials_path, "w", encoding="utf-8") as f:
+                json.dump(creds_data, f, indent=2)
+            if os.path.exists(TOKEN_PATH):
+                os.remove(TOKEN_PATH)
+            logger.info("Updated OAuth credentials and cleared old token.")
+        except Exception as e:
+            logger.error(f"Failed to update credentials.json: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to update credentials.json: {str(e)}")
 
     # 2. Update .env file / environment variables
     try:
         env_lines = []
-        if os.path.exists(".env"):
-            with open(".env", "r") as f:
+        settings_path = os.path.abspath(SETTINGS_PATH)
+        if os.path.exists(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
                 env_lines = f.readlines()
         
         def update_env_var(lines, key, val):
@@ -172,7 +199,8 @@ async def update_settings(body: SettingsRequest) -> JSONResponse:
         update_env_var(env_lines, "USER_RESTING_HR", body.resting_hr)
         update_env_var(env_lines, "USER_TARGET_SLEEP_HOURS", body.target_sleep_hours)
         
-        with open(".env", "w") as f:
+        os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
+        with open(settings_path, "w", encoding="utf-8") as f:
             f.writelines(env_lines)
             
         # Update current runtime variables
@@ -186,19 +214,40 @@ async def update_settings(body: SettingsRequest) -> JSONResponse:
         logger.error(f"Failed to update .env: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update .env: {str(e)}")
 
-    # 3. Clear/validate token if client_id changed
-    try:
-        from auth import TOKEN_PATH
-        if os.path.exists(TOKEN_PATH):
-            with open(TOKEN_PATH, "r") as f:
-                token_data = json.load(f)
-            if token_data.get("client_id") != body.client_id:
-                os.remove(TOKEN_PATH)
-                logger.info("Client ID changed. Deleted old token.json.")
-    except Exception as e:
-        logger.warning(f"Failed to inspect/delete old token.json: {e}")
-
     return JSONResponse(content={"status": "success", "message": "Settings updated successfully."})
+
+
+@app.get("/api/ready", summary="Container health check")
+async def ready() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/url", summary="Create Google OAuth authorization URL")
+async def auth_url(redirect_uri: str | None = None) -> JSONResponse:
+    if not has_client_config():
+        raise HTTPException(
+            status_code=503,
+            detail="Google OAuth client is not configured.",
+        )
+    try:
+        return JSONResponse(content={"url": get_authorization_url(redirect_uri)})
+    except Exception as e:
+        logger.error(f"Failed to build OAuth URL: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/api/auth/callback", summary="Finish Google OAuth web flow")
+async def auth_callback(code: str | None = None, redirect_uri: str | None = None, error: str | None = None) -> JSONResponse:
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing OAuth code.")
+    try:
+        finish_web_consent(code, redirect_uri)
+        return JSONResponse(content={"status": "ok"})
+    except Exception as e:
+        logger.error(f"OAuth callback failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/status", summary="OAuth token status and scope info")

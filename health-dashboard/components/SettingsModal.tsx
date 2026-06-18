@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useDashboardStore } from "@/lib/store";
-import { X, Check, Cloud, RefreshCw, Key, Shield, User, Heart } from "lucide-react";
+import { X, Check, Cloud, RefreshCw, Key, Shield, User } from "lucide-react";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -15,23 +15,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   // Local state for settings form
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
-  const [age, setAge] = useState(28);
-  const [maxHR, setMaxHR] = useState(185);
-  const [restingHR, setRestingHR] = useState(58);
-  const [targetSleepHours, setTargetSleepHours] = useState(8);
+  const [age, setAge] = useState(settings.age);
+  const [maxHR, setMaxHR] = useState(settings.maxHR);
+  const [restingHR, setRestingHR] = useState(settings.restingHR);
+  const [targetSleepHours, setTargetSleepHours] = useState(settings.targetSleepHours);
   const [loading, setLoading] = useState(false);
 
-  // Sync state from store when modal opens or settings change
-  useEffect(() => {
-    if (isOpen) {
-      setClientId("");
-      setClientSecret("");
-    }
-    setAge(settings.age);
-    setMaxHR(settings.maxHR);
-    setRestingHR(settings.restingHR);
-    setTargetSleepHours(settings.targetSleepHours);
-  }, [settings, isOpen]);
+  const closeModal = () => {
+    setClientId("");
+    setClientSecret("");
+    onClose();
+  };
 
   if (!isOpen) return null;
 
@@ -47,8 +41,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          clientId,
-          clientSecret,
+          clientId: clientId.trim() || undefined,
+          clientSecret: clientSecret.trim() || undefined,
           age,
           maxHR,
           restingHR,
@@ -93,18 +87,19 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         setDataMode("live");
         
         addToast("Connected — Live Data Mode active! Successfully synced physiological measurements.", "success");
-        onClose();
+        closeModal();
       } else {
         addToast(
-          "OAuth token not found or invalid. Please ensure you run the Python service (localhost:8000) and complete the browser authentication flow first.",
+          "No valid Google OAuth token found. Use Connect Google below.",
           "error"
         );
         setDataMode("sample");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown error";
       console.error("Connection error:", err);
       addToast(
-        `Could not connect to Google Health Gateway. Error: ${err.message}. Please verify backend configuration.`,
+        `Could not connect to Google Health Gateway. Error: ${message}. Please verify backend configuration.`,
         "error"
       );
       setDataMode("sample");
@@ -116,7 +111,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const handleResetToSample = () => {
     setDataMode("sample");
     addToast("Reset dashboard to Sample Data Mode.", "info");
-    onClose();
+    closeModal();
+  };
+
+  const handleConnectGoogle = () => {
+    window.location.href = "/api/auth/start";
   };
 
   return (
@@ -124,7 +123,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       <div className="absolute inset-0 overflow-hidden">
         {/* Backdrop overlay */}
         <div
-          onClick={onClose}
+          onClick={closeModal}
           className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity duration-300"
           aria-hidden="true"
         />
@@ -142,7 +141,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     </h2>
                   </div>
                   <button
-                    onClick={onClose}
+                    onClick={closeModal}
                     className="rounded-lg p-1 text-slate-400 hover:bg-white/10 hover:text-white transition-colors duration-200"
                   >
                     <X className="h-5 w-5" />
@@ -182,10 +181,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                 addToast("Live data fetch failed. Ensure your Python backend is running.", "error");
                               }
                             } else {
-                              addToast("No valid Google OAuth token found. Click 'Save & Connect Gateway' below to log in.", "error");
+                              addToast("No valid Google OAuth token found. Use Connect Google below.", "error");
                             }
-                          } catch (err) {
-                            addToast("Backend is offline. Please make sure the Python server is running on port 8000.", "error");
+                          } catch {
+                            addToast("Google Health gateway is unavailable.", "error");
                           } finally {
                             setLoading(false);
                           }
@@ -329,6 +328,15 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 {/* Action Buttons */}
                 <div className="space-y-2.5 pt-4">
                   <button
+                    type="button"
+                    onClick={handleConnectGoogle}
+                    className="w-full flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 py-2.5 text-white font-bold tracking-wide transition-all shadow-md shadow-emerald-600/10 hover:shadow-emerald-500/20"
+                  >
+                    <Cloud className="h-4 w-4" />
+                    Connect Google
+                  </button>
+
+                  <button
                     type="submit"
                     disabled={loading}
                     className="w-full flex items-center justify-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 py-2.5 text-white font-bold tracking-wide transition-all shadow-md shadow-indigo-600/10 hover:shadow-indigo-500/20 disabled:opacity-50"
@@ -336,10 +344,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                     {loading ? (
                       <>
                         <RefreshCw className="h-4 w-4 animate-spin" />
-                        Connecting...
+                        Saving...
                       </>
                     ) : (
-                      "Save & Connect Gateway"
+                      "Save Baselines"
                     )}
                   </button>
 

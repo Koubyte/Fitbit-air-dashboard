@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useDashboardStore } from "@/lib/store";
-import { Activity, ShieldCheck, Heart, Moon, Thermometer, Settings as SettingsIcon, Database, RefreshCw } from "lucide-react";
+import { Activity, Heart, Moon, Thermometer, Settings as SettingsIcon, Database, RefreshCw } from "lucide-react";
 import { MetricInfo } from "@/components/MetricInfo";
 
 interface HeaderProps {
@@ -29,7 +29,7 @@ export function Header({ onOpenSettings }: HeaderProps) {
       } else {
         addToast("Live data fetch failed.", "error");
       }
-    } catch (err) {
+    } catch {
       addToast("Backend is offline.", "error");
     } finally {
       setIsRefreshing(false);
@@ -57,10 +57,10 @@ export function Header({ onOpenSettings }: HeaderProps) {
           setDataMode("live");
           addToast("Connected — Live Data Mode active! Successfully synced physiological measurements.", "success");
         } else {
-          addToast("No valid Google OAuth token found. Please click 'Settings' to configure credentials and sign in first.", "error");
+          addToast("No valid Google OAuth token found. Open Settings, then Connect Google.", "error");
         }
-      } catch (err) {
-        addToast("Cannot connect to Google Health Gateway. Make sure your Python server is running on port 8000.", "error");
+      } catch {
+        addToast("Cannot connect to Google Health gateway.", "error");
       } finally {
         setIsToggling(false);
       }

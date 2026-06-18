@@ -1,0 +1,9 @@
+.env
+.coolify.env
+google-health-service/credentials.json
+google-health-service/token.json
+google-health-service/.env
+google-health-service/venv/
+health-dashboard/.env*
+health-dashboard/node_modules/
+health-dashboard/.next/

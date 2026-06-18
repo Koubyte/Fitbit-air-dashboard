@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
+import { backendUrl } from "@/lib/backend";
 
 export async function GET() {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), 10000); // 10-second timeout
 
   try {
-    const res = await fetch("http://127.0.0.1:8000/api/health-data", {
+    const res = await fetch(backendUrl("/api/health-data"), {
       signal: controller.signal,
       cache: "no-store", // Do not cache proxy responses at Next.js server layer
     });
@@ -24,14 +25,15 @@ export async function GET() {
 
     const data = await res.json();
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
     clearTimeout(id);
+    const errorName = error instanceof Error ? error.name : "";
     return NextResponse.json(
       {
         error: "backend_unavailable",
-        message: error.name === "AbortError" 
+        message: errorName === "AbortError"
           ? "Request to the Python service timed out after 10 seconds."
-          : "The local Python gateway service is not running on port 8000.",
+          : "The Google Health gateway service is unavailable.",
       },
       { status: 503 }
     );

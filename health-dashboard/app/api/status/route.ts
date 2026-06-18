@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
+import { backendUrl } from "@/lib/backend";
 
 export async function GET() {
   try {
-    const res = await fetch("http://127.0.0.1:8000/api/status", {
+    const res = await fetch(backendUrl("/api/status"), {
       cache: "no-store",
     });
 
@@ -12,7 +13,7 @@ export async function GET() {
 
     const data = await res.json();
     return NextResponse.json(data);
-  } catch (error) {
+  } catch {
     // Gracefully fallback to token_valid = false when backend is offline
     return NextResponse.json({
       token_valid: false,

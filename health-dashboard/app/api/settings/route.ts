@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
+import { backendUrl } from "@/lib/backend";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     
-    const res = await fetch("http://127.0.0.1:8000/api/settings", {
+    const res = await fetch(backendUrl("/api/settings"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -29,9 +30,10 @@ export async function POST(request: Request) {
 
     const data = await res.json();
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
-      { error: "backend_unavailable", message: error.message },
+      { error: "backend_unavailable", message },
       { status: 503 }
     );
   }

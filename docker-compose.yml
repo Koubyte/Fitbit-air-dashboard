@@ -1,0 +1,46 @@
+services:
+  api:
+    build:
+      context: ./google-health-service
+    environment:
+      CREDENTIALS_PATH: /data/credentials.json
+      TOKEN_PATH: /data/token.json
+      SETTINGS_PATH: /data/settings.env
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_PROJECT_ID: ${GOOGLE_PROJECT_ID:-fitbit-air-dashboard}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}
+      CORS_ORIGINS: ${PUBLIC_APP_URL:-http://localhost:3000}
+      USER_MAX_HR: ${USER_MAX_HR:-185}
+      USER_RESTING_HR: ${USER_RESTING_HR:-58}
+      USER_TARGET_SLEEP_HOURS: ${USER_TARGET_SLEEP_HOURS:-8}
+      SKIN_TEMP_AVAILABLE: ${SKIN_TEMP_AVAILABLE:-true}
+    volumes:
+      - google_health_data:/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  web:
+    build:
+      context: ./health-dashboard
+    environment:
+      HEALTH_API_URL: http://api:8000
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}
+      DASHBOARD_USER: ${DASHBOARD_USER:-}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+    expose:
+      - "3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  google_health_data:
