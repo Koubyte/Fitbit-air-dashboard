@@ -215,7 +215,8 @@ def fetch_heart_rate(
                 "value": float(val),
                 "data_type": "HEART_RATE"
             })
-            
+
+    normalized.sort(key=lambda x: x["timestamp"])
     logger.info(f"fetch_heart_rate: {len(normalized)} points returned.")
     return normalized
 
@@ -263,7 +264,8 @@ def fetch_spo2(
                 "value": float(val),
                 "data_type": "OXYGEN_SATURATION"
             })
-            
+
+    normalized.sort(key=lambda x: x["timestamp"])
     logger.info(f"fetch_spo2: {len(normalized)} points returned.")
     return normalized
 
@@ -300,7 +302,8 @@ def fetch_steps(
                 "value": float(val),
                 "data_type": "STEPS"
             })
-            
+
+    normalized.sort(key=lambda x: x["timestamp"])
     logger.info(f"fetch_steps: {len(normalized)} points returned.")
     return normalized
 
