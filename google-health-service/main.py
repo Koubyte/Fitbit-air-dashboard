@@ -164,7 +164,7 @@ def _attach_mobile_heart_rate(payload: dict[str, Any]) -> dict[str, Any]:
     }
     for point in mobile_points:
         by_ts[point["timestamp"]] = point
-    payload["heart_rate"] = sorted(by_ts.values(), key=lambda point: point["timestamp"])[-10000:]
+    payload["heart_rate"] = sorted(by_ts.values(), key=lambda point: point["timestamp"])
     return payload
 
 

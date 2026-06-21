@@ -134,7 +134,7 @@ function StatCard({
 
 export default function HeartPage() {
   const { dataMode, liveData, lastSync, settings } = useDashboardStore();
-  const [rangeMs, setRangeMs] = useState<number>(3 * 60 * 60 * 1000);
+  const [rangeMs, setRangeMs] = useState<number>(Infinity);
   const now = useSecondTick();
 
   const heartRate = useMemo(() => {

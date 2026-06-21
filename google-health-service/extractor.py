@@ -20,6 +20,7 @@ load_dotenv()
 logger = logging.getLogger("extractor")
 
 SKIN_TEMP_AVAILABLE: bool = os.getenv("SKIN_TEMP_AVAILABLE", "true").lower() == "true"
+HEART_RATE_PAGE_LIMIT: int = int(os.getenv("HEART_RATE_PAGE_LIMIT", "24"))
 
 BASE_URL = "https://health.googleapis.com/v4"
 
@@ -70,6 +71,39 @@ def _handle_response_errors(response: requests.Response, context: str) -> bool:
     return False
 
 # ─── Data Extraction Functions ──────────────────────────────────────────
+
+def _fetch_paginated_data_points(
+    credentials: Credentials,
+    url: str,
+    params: dict[str, Any],
+    context: str,
+    page_limit: int,
+) -> list[dict[str, Any]]:
+    data_points: list[dict[str, Any]] = []
+    page_token: str | None = None
+
+    for _ in range(max(1, page_limit)):
+        page_params = dict(params)
+        if page_token:
+            page_params["pageToken"] = page_token
+
+        response = requests.get(
+            url,
+            headers=_get_auth_headers(credentials),
+            params=page_params,
+            timeout=30,
+        )
+        if not _handle_response_errors(response, context):
+            break
+
+        body = response.json()
+        data_points.extend(body.get("dataPoints", []))
+        page_token = body.get("nextPageToken")
+        if not page_token:
+            break
+
+    return data_points
+
 
 def _probe_data_points(
     credentials: Credentials,
@@ -199,17 +233,13 @@ def fetch_heart_rate(
     filter_expr = f"heart_rate.sample_time.physical_time >= \"{start_time}\" AND heart_rate.sample_time.physical_time < \"{end_time}\""
     
     url = f"{BASE_URL}/users/me/dataTypes/heart-rate/dataPoints:reconcile"
-    response = requests.get(
+    points = _fetch_paginated_data_points(
+        credentials,
         url,
-        headers=_get_auth_headers(credentials),
-        params={"filter": filter_expr, "pageSize": 10000},
-        timeout=30,
+        {"filter": filter_expr, "pageSize": 10000},
+        "fetch_heart_rate",
+        HEART_RATE_PAGE_LIMIT,
     )
-    if not _handle_response_errors(response, "fetch_heart_rate"):
-        return []
-
-    data = response.json()
-    points = data.get("dataPoints", [])
     
     normalized = []
     for pt in points:
